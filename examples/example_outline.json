@@ -1,0 +1,32 @@
+{
+  "title": "Example deck (synthetic smoke test — NOT a formal case answer)",
+  "author": "example",
+  "audience": "internal review",
+  "duration_min": 10,
+  "slides": [
+    {
+      "id": "s01",
+      "type": "title",
+      "title": "A Sample Paper: Method and Results",
+      "bullets": ["Presenter", "Date"],
+      "notes": "Open with the one-line contribution; state the research question.",
+      "evidence": {"source_type": "title/abstract", "source_id": "title", "section": "abstract", "page": 1, "confidence": "high"}
+    },
+    {
+      "id": "s02",
+      "type": "content",
+      "title": "Problem and hypothesis",
+      "bullets": ["Research question stated in the abstract", "Main hypothesis and its motivation"],
+      "notes": "Transition from motivation to the specific gap the paper closes.",
+      "evidence": {"source_type": "section", "source_id": "Sec. 1", "section": "Introduction", "page": 2, "confidence": "high"}
+    },
+    {
+      "id": "s03",
+      "type": "content",
+      "title": "Key result",
+      "bullets": ["Primary quantitative result (copy value and unit exactly)", "Comparison to baseline"],
+      "notes": "Emphasize the headline number; note the figure that carries it.",
+      "evidence": {"source_type": "figure", "source_id": "Fig. 3", "section": "Results", "page": 6, "confidence": "medium"}
+    }
+  ]
+}
