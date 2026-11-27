@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PaperToSlides page outline",
+  "type": "object",
+  "required": ["title", "slides"],
+  "properties": {
+    "title": {"type": "string", "description": "Deck title (usually the paper's contribution in one line)."},
+    "author": {"type": "string"},
+    "audience": {"type": "string", "description": "Who the talk is for; drives terminology level."},
+    "duration_min": {"type": "number", "description": "Target talk length in minutes."},
+    "slide_count_limit": {"type": ["integer", "null"], "description": "Hard page cap from the case."},
+    "source_doc": {"type": "string", "description": "Original paper/material path."},
+    "slides": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "title"],
+        "properties": {
+          "id": {"type": "string", "description": "Stable page id, e.g. s01."},
+          "type": {"enum": ["title", "section", "content", "two_content", "image", "thanks", "outline"]},
+          "title": {"type": "string", "description": "The page-level claim, not a section label."},
+          "bullets": {"type": "array", "items": {"type": "string"}, "description": "Short speakable phrases, not full sentences."},
+          "image": {"type": "string", "description": "Optional path to a figure/table image reused on the page."},
+          "notes": {"type": "string", "description": "Speaker notes: transition, emphasis, backup evidence; must NOT repeat page text."},
+          "evidence": {
+            "type": "object",
+            "required": ["source_type", "source_id"],
+            "properties": {
+              "source_type": {"enum": ["figure", "table", "equation", "section", "paragraph", "data", "supplement"]},
+              "source_id": {"type": "string", "description": "Exact label as in the paper, e.g. Fig. 3, Table 2, Eq. (7), Sec. 3.2."},
+              "section": {"type": "string"},
+              "page": {"type": ["integer", "null"]},
+              "quote": {"type": "string", "description": "Verbatim value/conclusion copied without rewriting numbers or units."},
+              "confidence": {"enum": ["high", "medium", "low"]}
+            }
+          }
+        }
+      }
+    }
+  }
+}
