@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PaperToSlides page-level evidence map",
+  "type": "object",
+  "required": ["case_id", "pages"],
+  "properties": {
+    "case_id": {"type": "string"},
+    "source_doc": {"type": "string", "description": "Original paper/material path."},
+    "template": {"type": "string", "description": "Template deck path used, if any."},
+    "pages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["page_id", "claim", "evidence"],
+        "properties": {
+          "page_id": {"type": "string"},
+          "claim": {"type": "string", "description": "The page-level claim (must equal the slide title)."},
+          "evidence": {
+            "type": "object",
+            "required": ["source_type", "source_id"],
+            "properties": {
+              "source_type": {"enum": ["figure", "table", "equation", "section", "paragraph", "data", "supplement"]},
+              "source_id": {"type": "string"},
+              "section": {"type": "string"},
+              "page": {"type": ["integer", "null"]},
+              "quote": {"type": "string", "description": "Verbatim source text/value."},
+              "confidence": {"enum": ["high", "medium", "low"]}
+            }
+          },
+          "image_used": {"type": ["string", "null"], "description": "Path to the figure/table image placed on the page, if any."}
+        }
+      }
+    }
+  }
+}
