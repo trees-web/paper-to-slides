@@ -5,8 +5,9 @@ Pure standard library (no python-pptx / lxml required). Two paths:
 
 * python-pptx (preferred when importable) — highest-fidelity template editing.
 * self-contained OOXML writer — copies the template package verbatim and appends new
-  slides/notesSlides that reference the template's existing layout; falls back to a
-  minimal built-in master/layout/theme when no template is given.
+  slides/notesSlides that reference the template's layouts; each slide picks the layout
+  that best matches its page type and reuses that layout's placeholder geometry, so the
+  deck follows the template's title/body/picture positions, theme colors and fonts.
 
 Usage:
   python build_deck.py --outline outline.json --out deck.pptx [--template template.pptx]
@@ -55,7 +56,7 @@ def _xfrm(x, y, cx, cy):
     return ('<a:xfrm><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm>' % (x, y, cx, cy))
 
 
-def _text_shape(shape_id, name, ph_type, x, y, cx, cy, paragraphs):
+def _text_shape(shape_id, name, ph_type, x, y, cx, cy, paragraphs, idx=None):
     pxml = []
     for text, size, bold, bullet in paragraphs:
         ppr = '<a:pPr><a:buChar char="\u2022"/></a:pPr>' if bullet else ""
@@ -63,7 +64,10 @@ def _text_shape(shape_id, name, ph_type, x, y, cx, cy, paragraphs):
         pxml.append('<a:p>%s<a:r>%s<a:t>%s</a:t></a:r></a:p>' % (ppr, rpr, esc(text)))
     body = ('<a:bodyPr wrap="square"><a:normAutofit fontScale="100000" lnSpcReduction="10000"/></a:bodyPr>'
             '<a:lstStyle/>' + "".join(pxml))
-    ph = '<p:ph type="%s"/>' % ph_type if ph_type else "<p:ph/>"
+    if ph_type:
+        ph = '<p:ph type="%s"%s/>' % (ph_type, ' idx="%s"' % idx if idx else "")
+    else:
+        ph = "<p:ph/>"
     return ('<p:sp><p:nvSpPr><p:cNvPr id="%d" name="%s"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
             '<p:nvPr>%s</p:nvPr></p:nvSpPr><p:spPr>%s</p:spPr><p:txBody>%s</p:txBody></p:sp>'
             % (shape_id, esc(name), ph, _xfrm(x, y, cx, cy), body))
@@ -74,45 +78,6 @@ def _picture(shape_id, name, rel_id, x, y, cx, cy):
             '<p:blipFill><a:blip r:embed="%s"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>'
             '<p:spPr>%s<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>'
             % (shape_id, esc(name), rel_id, _xfrm(x, y, cx, cy)))
-
-
-def _layout_geometry(has_img, has_bullets):
-    W, H = SLIDE_W, SLIDE_H
-    x = {"title": int(0.06 * W), "body": int(0.07 * W), "img": int(0.0 * W)}
-    y = {"title": int(0.05 * H), "body": int(0.27 * H), "img": int(0.0 * H)}
-    cx = {"title": int(0.88 * W), "body": int(0.86 * W), "img": int(0.0 * W)}
-    cy = {"title": int(0.18 * H), "body": int(0.66 * H), "img": int(0.0 * H)}
-    if has_img and has_bullets:
-        cx["body"] = int(0.52 * W)
-        x["img"] = int(0.60 * W); y["img"] = int(0.27 * H); cx["img"] = int(0.35 * W); cy["img"] = int(0.66 * H)
-    elif has_img:
-        x["img"] = int(0.10 * W); y["img"] = int(0.30 * H); cx["img"] = int(0.80 * W); cy["img"] = int(0.62 * H)
-    return x, y, cx, cy
-
-
-def _slide_xml(slide, has_img):
-    shapes = []
-    sid = 2
-    has_bullets = bool(slide.get("bullets"))
-    x, y, cx, cy = _layout_geometry(has_img, has_bullets)
-    shapes.append(_text_shape(sid, "Title 1", "title", x["title"], y["title"], cx["title"], cy["title"],
-                              [(slide.get("title") or "", 2800, True, False)]))
-    sid += 1
-    if has_bullets:
-        paras = [(b, 1800, False, True) for b in slide.get("bullets")]
-        shapes.append(_text_shape(sid, "Content Placeholder 2", "body", x["body"], y["body"], cx["body"], cy["body"], paras))
-        sid += 1
-    if has_img:
-        shapes.append(_picture(sid, "Picture %d" % sid, "rId2", x["img"], y["img"], cx["img"], cy["img"]))
-        sid += 1
-    spTree = ('<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
-              '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/>'
-              '<a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>'
-              + "".join(shapes) + "</p:spTree>")
-    return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            '<p:sld xmlns:a="%s" xmlns:r="%s" xmlns:p="%s"><p:cSld>%s</p:cSld>'
-            '<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>'
-            % (NS_A, NS_R, NS_P, spTree))
 
 
 def _notes_xml(notes_text):
@@ -256,17 +221,143 @@ def _read_zip(path):
     return {n: z.read(n) for n in z.namelist()}
 
 
-def _choose_layout(parts):
-    """Pick the best layout: one with title+body placeholders; else the first layout."""
-    names = sorted([n for n in parts if re.match(r'ppt/slideLayouts/slideLayout\d+\.xml$', n)],
-                   key=lambda s: int(re.search(r'(\d+)', s).group(1)))
-    if not names:
-        return "ppt/slideLayouts/slideLayout1.xml"
-    for n in names:
-        xml = parts[n].decode("utf-8", "replace")
-        if 'ph type="title"' in xml and 'ph type="body"' in xml:
-            return n
-    return names[0]
+def _parse_layout_geo(layout_xml):
+    """Return {'title': (x,y,cx,cy), 'body:1': (...), 'body:2': (...), 'pic': (...)} in EMU."""
+    geo = {}
+    for m in re.finditer(r'<p:sp>(.*?)</p:sp>', layout_xml, re.S):
+        sp = m.group(1)
+        phm = re.search(r'<p:ph type="(\w+)"[^>]*?(?:idx="(\d+)")?', sp)
+        if not phm:
+            continue
+        phtype = phm.group(1)
+        idx = phm.group(2)
+        xf = re.search(r'<a:off x="(\d+)" y="(\d+)"/><a:ext cx="(\d+)" cy="(\d+)"/>', sp)
+        if not xf:
+            continue
+        key = phtype if not idx else "%s:%s" % (phtype, idx)
+        geo[key] = tuple(int(v) for v in xf.groups())
+    return geo
+
+
+def _discover_layouts(parts):
+    layouts = []
+    for name in parts:
+        m = re.match(r'ppt/slideLayouts/slideLayout(\d+)\.xml$', name)
+        if not m:
+            continue
+        xml = parts[name].decode("utf-8", "replace")
+        types = set(re.findall(r'<p:ph type="(\w+)"', xml))
+        geo = _parse_layout_geo(xml)
+        layouts.append({"path": name, "num": int(m.group(1)), "types": types, "geo": geo})
+    layouts.sort(key=lambda l: l["num"])
+    return layouts
+
+
+def _layout_for_type(layouts, stype):
+    """Choose the layout whose placeholder signature best matches the slide type."""
+    if not layouts:
+        return None
+    # desired signatures, most specific first
+    prefs = {
+        "title":       [{"title", "ctrTitle"}, {"title", "subTitle"}, {"title"}],
+        "section":     [{"title"}, {"title", "body"}],
+        "outline":     [{"title", "body"}],
+        "content":     [{"title", "body"}],
+        "two_content": [{"title", "body"}, {"title", "body:1", "body:2"}],
+        "image":       [{"title", "pic"}, {"title", "body"}, {"title"}],
+        "thanks":      [{"title"}],
+    }
+    candidates = prefs.get(stype, [{"title", "body"}])
+    # scoring: +2 per exact match, +1 for title, +1 for body; prefer layouts whose types
+    # cover the wanted set; fall back to first layout.
+    best, best_score = None, -1
+    for lay in layouts:
+        for want in candidates:
+            score = 0
+            for t in want:
+                if t in lay["types"]:
+                    score += 2
+            if "title" in lay["types"] and "title" in want:
+                score += 1
+            if score > best_score:
+                best, best_score = lay, score
+    return best or layouts[0]
+
+
+def _slide_geometry(stype, has_img, has_bullets, layout):
+    """Final placement boxes; prefer template layout geometry, else hardcoded 16:9."""
+    geo = (layout or {}).get("geo") or {}
+    W, H = SLIDE_W, SLIDE_H
+    out = {
+        "title": geo.get("title") or geo.get("ctrTitle") or (int(0.06 * W), int(0.05 * H), int(0.88 * W), int(0.18 * H)),
+    }
+    # body positions (idx 1 and 2 if present)
+    b1 = geo.get("body") or geo.get("body:1") or (int(0.07 * W), int(0.27 * H), int(0.86 * W), int(0.66 * H))
+    b2 = geo.get("body:2")
+    pic = geo.get("pic")
+    out["body"] = b1
+    out["body2"] = b2
+    out["pic"] = pic
+    if stype in ("title", "section", "thanks"):
+        out["show_title_only"] = True
+    else:
+        out["show_title_only"] = False
+    # image layouts
+    if stype == "image" or (has_img and stype != "two_content"):
+        if pic:
+            out["img"] = pic
+            out["body"] = b1 if has_bullets else None
+        else:
+            if has_bullets:
+                out["img"] = (int(0.60 * W), int(0.27 * H), int(0.35 * W), int(0.66 * H))
+                out["body"] = (int(0.07 * W), int(0.27 * H), int(0.50 * W), int(0.66 * H))
+            else:
+                out["img"] = (int(0.10 * W), int(0.30 * H), int(0.80 * W), int(0.62 * H))
+    elif has_img and stype == "two_content":
+        out["img"] = (int(0.60 * W), int(0.27 * H), int(0.35 * W), int(0.66 * H))
+        out["body"] = b1 if has_bullets else None
+        out["body2"] = None
+    else:
+        out["img"] = None
+    return out
+
+
+def _slide_xml(slide, has_img, layout):
+    stype = slide.get("type") or "content"
+    bullets = slide.get("bullets") or []
+    has_bullets = bool(bullets)
+    geo = _slide_geometry(stype, has_img, has_bullets, layout)
+    shapes = []
+    sid = 2
+    shapes.append(_text_shape(sid, "Title 1", "title", *geo["title"],
+                              [(slide.get("title") or "", 2800, True, False)]))
+    sid += 1
+    if not geo.get("show_title_only") and has_bullets:
+        if stype == "two_content" and geo.get("body2"):
+            half = len(bullets) // 2 or 1
+            left = bullets[:half]
+            right = bullets[half:]
+            shapes.append(_text_shape(sid, "Content Placeholder 2", "body", *geo["body"],
+                                      [(b, 1800, False, True) for b in left], idx=1))
+            sid += 1
+            shapes.append(_text_shape(sid, "Content Placeholder 3", "body", *geo["body2"],
+                                      [(b, 1800, False, True) for b in right], idx=2))
+            sid += 1
+        elif geo.get("body"):
+            shapes.append(_text_shape(sid, "Content Placeholder 2", "body", *geo["body"],
+                                      [(b, 1800, False, True) for b in bullets], idx=1))
+            sid += 1
+    if has_img and geo.get("img"):
+        shapes.append(_picture(sid, "Picture %d" % sid, "rId2", *geo["img"]))
+        sid += 1
+    spTree = ('<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
+              '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/>'
+              '<a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>'
+              + "".join(shapes) + "</p:spTree>")
+    return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<p:sld xmlns:a="%s" xmlns:r="%s" xmlns:p="%s"><p:cSld>%s</p:cSld>'
+            '<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>'
+            % (NS_A, NS_R, NS_P, spTree))
 
 
 def _next_slide_id(pres_xml):
@@ -285,7 +376,6 @@ def _next_rid(rels_xml):
 
 
 def _insert_sld_ids(pres_xml, pairs):
-    """pairs: list of (slide_id, rid)"""
     adds = "".join('<p:sldId id="%d" r:id="rId%d"/>' % (sid, rid) for sid, rid in pairs)
     if "<p:sldIdLst>" in pres_xml and "</p:sldIdLst>" in pres_xml:
         pres_xml = pres_xml.replace("</p:sldIdLst>", adds + "</p:sldIdLst>", 1)
@@ -319,7 +409,7 @@ def build_oo_xml(outline, template, out):
         pres_xml = parts.get("ppt/presentation.xml", b"").decode("utf-8", "replace")
         pres_rels = parts.get("ppt/_rels/presentation.xml.rels", b"").decode("utf-8", "replace")
         ct_xml = parts.get("[Content_Types].xml", b"").decode("utf-8", "replace")
-        layout_name = _choose_layout(parts)
+        layouts = _discover_layouts(parts)
     else:
         parts = {
             "ppt/presentation.xml": _min_presentation_xml().encode("utf-8"),
@@ -341,7 +431,7 @@ def build_oo_xml(outline, template, out):
         pres_xml = parts["ppt/presentation.xml"].decode("utf-8")
         pres_rels = parts["ppt/_rels/presentation.xml.rels"].decode("utf-8")
         ct_xml = parts["[Content_Types].xml"].decode("utf-8")
-        layout_name = "ppt/slideLayouts/slideLayout1.xml"
+        layouts = []
 
     slide_id = _next_slide_id(pres_xml)
     rid = _next_rid(pres_rels)
@@ -352,6 +442,9 @@ def build_oo_xml(outline, template, out):
 
     for i, slide in enumerate(slides, 1):
         num = first_num + i - 1
+        stype = slide.get("type") or "content"
+        layout = _layout_for_type(layouts, stype)
+        layout_name = layout["path"] if layout else "ppt/slideLayouts/slideLayout1.xml"
         img = slide.get("image")
         has_img = bool(img and os.path.exists(img))
         media_name = None
@@ -363,7 +456,7 @@ def build_oo_xml(outline, template, out):
             parts[media_name] = open(img, "rb").read()
             ct_defaults.append('<Default Extension="%s" ContentType="image/%s"/>' % (ext, "jpeg" if ext in ("jpg", "jpeg") else ext))
 
-        parts["ppt/slides/slide%d.xml" % num] = _slide_xml(slide, has_img).encode("utf-8")
+        parts["ppt/slides/slide%d.xml" % num] = _slide_xml(slide, has_img, layout).encode("utf-8")
         srels = [_rel("rId1", RT_SLIDELAYOUT, "../slideLayouts/" + os.path.basename(layout_name))]
         if has_img:
             srels.append(_rel("rId2", RT_IMAGE, "../media/" + os.path.basename(media_name)))
@@ -407,25 +500,57 @@ def build_with_pptx(outline, template, out):
     prs.slide_width = Emu(SLIDE_W)
     prs.slide_height = Emu(SLIDE_H)
     layouts = list(prs.slide_layouts)
-    title_layout = layouts[0] if layouts else None
-    content_layout = title_layout
-    for lay in layouts:
-        types = {ph.placeholder_format.type for ph in lay.placeholders}
-        if PP_PLACEHOLDER.TITLE in types and PP_PLACEHOLDER.BODY in types:
-            content_layout = lay
-            break
+
+    def pick(stype):
+        prefs = {
+            "title": [{"title", "ctrTitle"}, {"title", "subtitle"}, {"title"}],
+            "section": [{"title"}, {"title", "body"}],
+            "outline": [{"title", "body"}],
+            "content": [{"title", "body"}],
+            "two_content": [{"title", "body"}, {"title", "body", "picture"}],
+            "image": [{"title", "picture"}, {"title", "body"}, {"title"}],
+            "thanks": [{"title"}],
+        }
+        best, best_score = None, -1
+        for lay in layouts:
+            types = {ph.placeholder_format.type for ph in lay.placeholders}
+            for want in prefs.get(stype, [{"title", "body"}]):
+                score = sum(2 for t in want if _ppt_type(t) in types)
+                if "title" in types:
+                    score += 1
+                if score > best_score:
+                    best, best_score = lay, score
+        return best or (layouts[0] if layouts else None)
+
+    def _ppt_type(name):
+        return {"title": PP_PLACEHOLDER.TITLE, "ctrTitle": PP_PLACEHOLDER.CENTER_TITLE,
+                "subtitle": PP_PLACEHOLDER.SUBTITLE, "body": PP_PLACEHOLDER.BODY,
+                "picture": PP_PLACEHOLDER.PICTURE}.get(name, name)
+
     for idx, slide in enumerate(outline.get("slides") or []):
-        lay = title_layout if (idx == 0 and len(layouts) > 1) else content_layout
+        stype = slide.get("type") or "content"
+        lay = pick(stype)
         if lay is None:
-            lay = title_layout
+            continue
         s = prs.slides.add_slide(lay)
         try:
             s.shapes.title.text = slide.get("title") or ""
         except Exception:
             pass
         bullets = slide.get("bullets") or []
-        for ph in s.placeholders:
-            if ph.placeholder_format.type == PP_PLACEHOLDER.BODY:
+        body_phs = [ph for ph in s.placeholders if ph.placeholder_format.type == PP_PLACEHOLDER.BODY]
+        if body_phs:
+            if stype == "two_content" and len(body_phs) >= 2:
+                half = len(bullets) // 2 or 1
+                for ph, chunk in zip(body_phs[:2], (bullets[:half], bullets[half:])):
+                    tf = ph.text_frame
+                    tf.clear()
+                    for j, b in enumerate(chunk):
+                        p = tf.paragraphs[0] if j == 0 else tf.add_paragraph()
+                        p.text = b
+                        p.level = 0
+            else:
+                ph = body_phs[0]
                 tf = ph.text_frame
                 tf.clear()
                 for j, b in enumerate(bullets):
@@ -434,8 +559,12 @@ def build_with_pptx(outline, template, out):
                     p.level = 0
         img = slide.get("image")
         if img and os.path.exists(img):
+            pic_phs = [ph for ph in s.placeholders if ph.placeholder_format.type == PP_PLACEHOLDER.PICTURE]
             try:
-                s.shapes.add_picture(img, Emu(int(0.60 * SLIDE_W)), Emu(int(0.27 * SLIDE_H)), width=Emu(int(0.35 * SLIDE_W)))
+                if pic_phs:
+                    pic_phs[0].insert_picture(img)
+                else:
+                    s.shapes.add_picture(img, Emu(int(0.60 * SLIDE_W)), Emu(int(0.27 * SLIDE_H)), width=Emu(int(0.35 * SLIDE_W)))
             except Exception:
                 pass
         notes = slide.get("notes") or ""
