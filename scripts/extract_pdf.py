@@ -61,6 +61,46 @@ def snippet(txt, pos):
     return re.sub(r"\s+", " ", s)
 
 
+def extract_embedded_images(pdf_path, out):
+    """Best-effort extraction of embedded raster images per page via PyMuPDF.
+
+    Returns (items, error). Each item records the saved PNG, its page and its
+    bounding box so the caller can pair an image with a figure/table caption by
+    page proximity. Vector figures (no embedded raster) fall back to the rendered
+    page image.
+    """
+    try:
+        import fitz
+    except Exception:
+        return [], "PyMuPDF unavailable"
+    os.makedirs(os.path.join(out, "figures"), exist_ok=True)
+    items = []
+    try:
+        doc = fitz.open(pdf_path)
+        for pno in range(len(doc)):
+            page = doc[pno]
+            for info in page.get_image_info(xrefs=True):
+                xref = info.get("xref")
+                bbox = info.get("bbox")
+                if not xref or not bbox:
+                    continue
+                try:
+                    pix = fitz.Pixmap(doc, xref)
+                    if pix.n - pix.alpha >= 4:
+                        pix = fitz.Pixmap(fitz.csRGB, pix)
+                    name = "figures/page%03d_xref%d.png" % (pno + 1, xref)
+                    pix.save(os.path.join(out, name))
+                    items.append({"image": name, "page": pno + 1,
+                                  "bbox": [round(float(v), 1) for v in bbox],
+                                  "xref": xref, "width": pix.width, "height": pix.height})
+                except Exception:
+                    continue
+        doc.close()
+    except Exception as e:
+        return items, "PyMuPDF image extraction failed: %s" % e
+    return items, None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pdf", required=True)
@@ -131,11 +171,19 @@ def main():
         else:
             manifest["warnings"].append("pdftoppm failed: %s" % r.stderr.strip()[:200])
 
+    # embedded raster figures/tables (for page-level figure placement)
+    fig_imgs, fig_err = extract_embedded_images(args.pdf, args.out)
+    if fig_imgs:
+        manifest["figure_images"] = fig_imgs
+    if fig_err:
+        manifest["warnings"].append(fig_err)
+
     json.dump(manifest, open(os.path.join(args.out, "manifest.json"), "w", encoding="utf-8"),
               ensure_ascii=False, indent=2)
     print(json.dumps({"status": manifest["status"], "page_count": manifest["page_count"],
                       "figures": len(manifest["figures"]), "tables": len(manifest["tables"]),
                       "equations": len(manifest["equations"]), "rendered": len(manifest["rendered_pages"]),
+                      "figure_images": len(manifest.get("figure_images", [])),
                       "tool": manifest["tool"], "manifest": os.path.join(args.out, "manifest.json")},
                      ensure_ascii=False))
 
