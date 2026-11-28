@@ -45,6 +45,7 @@ python scripts/extract_pdf.py --pdf <paper.pdf> --out /app/work/extract [--dpi 1
 ```
 - 产出 `fulltext.txt`、逐页 `pages/page-*.txt`、`page_images/page-*.png` 与 `manifest.json`。
 - 从 manifest 读取页数、检测到的图/表/公式编号及其所在页。
+- 若 PyMuPDF 可用，`manifest.figure_images` 给出每页嵌入位图的 PNG 与 bbox；**按页就近把位图配到图/表**，矢量图回退到 `page_images/` 整页图。
 - **逐页读正文**，不要只读摘要。把"示意图/原理图"与"实验数据图/表"分开标注，不把他人结果当本文结果。
 
 ### 第 2 步 提取主线（写进 outline 前先自问）
@@ -59,6 +60,7 @@ python scripts/extract_pdf.py --pdf <paper.pdf> --out /app/work/extract [--dpi 1
 - 每页一个主张；标题写成"主张"而不是"章节名"（如写成"方法 X 使误差下降 40%"而非"结果"）。
 - 单页 3–5 个要点，每条是可讲的短短语，不是长句；数字、单位、方法名、结论表述与原文一致。
 - 每页填写 `evidence`：`source_type`（figure/table/equation/section/paragraph/data/supplement）、`source_id`（如 `Fig. 3`、`Table 2`、`Eq. (7)`、`Sec. 3.2`）、`section`、`page`、`quote`（逐字数值/结论，不改写）、`confidence`。
+- 每页填 `type`（`title/outline/section/content/two_content/image/thanks`）；build_deck 按类型选模板中匹配的版式，图文页引用抽出的 `figure_images` 位图。
 - 页数不超过 case 给定的上限；超限时优先合并支撑性细节进备注。
 
 ### 第 4 步 生成讲稿/备注（与页面文字分离）
@@ -72,9 +74,9 @@ python scripts/extract_pdf.py --pdf <paper.pdf> --out /app/work/extract [--dpi 1
 python scripts/build_deck.py --outline /app/work/outline.json \
   --template <template.pptx> --out /app/output/deck.pptx
 ```
-- 有模板时**原位追加页面并复用模板的 slideMaster/slideLayout/theme/media**（标题、配色、页脚、字体规则不覆盖）。
+- 有模板时**原位追加页面并复用模板的 slideMaster/slideLayout/theme/media**：逐页按 `type` 选择匹配版式，并复用该版式的 title/body/pic 占位符几何（标题、配色、页脚、字体规则不覆盖）。
 - 无模板时用内置最小母版生成 16:9 可编辑 PPTX。
-- 长标题/多图/大表格用"左侧要点 + 右侧图"或单图布局；控制字号，防止溢出与自动缩放。
+- 长标题/多图/大表格用"左侧要点 + 右侧图"或单图布局（`two_content` 双栏 / `image` 图文）；控制字号，防止溢出与自动缩放。
 - 优先使用 python-pptx（若运行时可用）；否则用内置纯标准库 OOXML 写入器，二者输出等价可编辑。
 
 ### 第 6 步 渲染并检查（脚本：`scripts/render_deck.py`）
